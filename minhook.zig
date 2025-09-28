@@ -37,11 +37,11 @@ pub const bindings = struct {
 
     /// Initialize the MinHook library. You must call this function EXACTLY ONCE
     /// at the beginning of your program.
-    pub extern fn MH_Initialize() callconv(std.os.windows.WINAPI) Status;
+    pub extern fn MH_Initialize() callconv(.winapi) Status;
 
     /// Uninitialize the MinHook library. You must call this function EXACTLY
     /// ONCE at the end of your program.
-    pub extern fn MH_Uninitialize() callconv(std.os.windows.WINAPI) Status;
+    pub extern fn MH_Uninitialize() callconv(.winapi) Status;
 
     /// Creates a hook for the specified target function, in disabled state.
     /// Parameters:
@@ -56,7 +56,7 @@ pub const bindings = struct {
         target: *const anyopaque,
         detour: *const anyopaque,
         original: ?**const anyopaque,
-    ) callconv(std.os.windows.WINAPI) Status;
+    ) callconv(.winapi) Status;
 
     /// Creates a hook for the specified API function, in disabled state.
     /// Parameters:
@@ -74,7 +74,7 @@ pub const bindings = struct {
         proc_name: [*:0]const u8,
         detour: *const anyopaque,
         original: ?**const anyopaque,
-    ) callconv(std.os.windows.WINAPI) Status;
+    ) callconv(.winapi) Status;
 
     /// Creates a hook for the specified API function, in disabled state.
     /// Parameters:
@@ -96,43 +96,43 @@ pub const bindings = struct {
         detour: *const anyopaque,
         original: ?**const anyopaque,
         target: ?**const anyopaque,
-    ) callconv(std.os.windows.WINAPI) Status;
+    ) callconv(.winapi) Status;
 
     /// Removes an already created hook.
     /// Parameters:
     ///   pTarget [in] A pointer to the target function.
-    pub extern fn MH_RemoveHook(target: *const anyopaque) callconv(std.os.windows.WINAPI) Status;
+    pub extern fn MH_RemoveHook(target: *const anyopaque) callconv(.winapi) Status;
 
     /// Enables an already created hook.
     /// Parameters:
     ///   pTarget [in] A pointer to the target function.
     ///                If this parameter is MH_ALL_HOOKS, all created hooks are
     ///                enabled in one go.
-    pub extern fn MH_EnableHook(target: ?*const anyopaque) callconv(std.os.windows.WINAPI) Status;
+    pub extern fn MH_EnableHook(target: ?*const anyopaque) callconv(.winapi) Status;
 
     /// Disables an already created hook.
     /// Parameters:
     ///   pTarget [in] A pointer to the target function.
     ///                If this parameter is MH_ALL_HOOKS, all created hooks are
     ///                disabled in one go.
-    pub extern fn MH_DisableHook(target: ?*const anyopaque) callconv(std.os.windows.WINAPI) Status;
+    pub extern fn MH_DisableHook(target: ?*const anyopaque) callconv(.winapi) Status;
 
     /// Queues to enable an already created hook.
     /// Parameters:
     ///   pTarget [in] A pointer to the target function.
     ///                If this parameter is MH_ALL_HOOKS, all created hooks are
     ///                queued to be enabled.
-    pub extern fn MH_QueueEnableHook(target: ?*const anyopaque) callconv(std.os.windows.WINAPI) Status;
+    pub extern fn MH_QueueEnableHook(target: ?*const anyopaque) callconv(.winapi) Status;
 
     /// Queues to disable an already created hook.
     /// Parameters:
     ///   pTarget [in] A pointer to the target function.
     ///                If this parameter is MH_ALL_HOOKS, all created hooks are
     ///                queued to be disabled.
-    pub extern fn MH_QueueDisableHook(target: ?*const anyopaque) callconv(std.os.windows.WINAPI) Status;
+    pub extern fn MH_QueueDisableHook(target: ?*const anyopaque) callconv(.winapi) Status;
 
     /// Applies all queued changes in one go.
-    pub extern fn MH_ApplyQueued() callconv(std.os.windows.WINAPI) Status;
+    pub extern fn MH_ApplyQueued() callconv(.winapi) Status;
 };
 
 pub const InitError = error{
@@ -203,14 +203,18 @@ pub const DisableError = error{
 
 pub fn Hook(comptime FuncType: type) type {
     return struct {
+        pub const Type = FuncType;
+
         target: FuncType,
-        trampoline: FuncType,
 
         /// Do not invoke the target function after hooking
         /// Returns the trampoline, which should be called instead
-        pub fn create(target: FuncType, detour: FuncType) CreateError!@This() {
-            var trampoline: FuncType = undefined;
-            switch (bindings.MH_CreateHook(@ptrCast(target), @ptrCast(@constCast(detour)), @ptrCast(&trampoline))) {
+        pub fn create(
+            target: FuncType,
+            detour: FuncType,
+            original: *FuncType,
+        ) CreateError!@This() {
+            switch (bindings.MH_CreateHook(@ptrCast(target), @ptrCast(@constCast(detour)), @ptrCast(original))) {
                 .ok => {},
                 .unknown => return error.Unknown,
                 .error_not_initialized => return error.NotInitialized,
@@ -224,15 +228,18 @@ pub fn Hook(comptime FuncType: type) type {
 
             return .{
                 .target = target,
-                .trampoline = trampoline,
             };
         }
 
-        pub fn findAndCreateHook(module_name: [:0]const u16, function_name: [:0]const u8, detour: FuncType) FindAndCreateError!@This() {
+        pub fn findAndCreateHook(
+            module_name: [:0]const u16,
+            function_name: [:0]const u8,
+            detour: FuncType,
+            original: *FuncType,
+        ) FindAndCreateError!@This() {
             var target: FuncType = undefined;
-            var trampoline: FuncType = undefined;
 
-            switch (bindings.MH_CreateHookApiEx(module_name, function_name, @ptrCast(detour), @ptrCast(&trampoline), @ptrCast(&target))) {
+            switch (bindings.MH_CreateHookApiEx(module_name, function_name, @ptrCast(detour), @ptrCast(original), @ptrCast(&target))) {
                 .ok => {},
                 .unknown => return error.Unknown,
                 .error_not_initialized => return error.NotInitialized,
@@ -248,7 +255,6 @@ pub fn Hook(comptime FuncType: type) type {
 
             return .{
                 .target = target,
-                .trampoline = trampoline,
             };
         }
 
@@ -269,7 +275,10 @@ pub fn Hook(comptime FuncType: type) type {
                 .error_not_initialized => error.NotInitialized,
                 .error_not_created => error.NotCreated,
                 .error_enabled => error.AlreadyEnabled,
-                else => unreachable,
+                else => |e| {
+                    std.log.info("hello {}", .{e});
+                    unreachable;
+                },
             };
         }
 
@@ -304,14 +313,6 @@ pub fn Hook(comptime FuncType: type) type {
             };
         }
     };
-}
-
-pub fn createHook(target: anytype, detour: @TypeOf(target)) CreateError!Hook(@TypeOf(target)) {
-    return Hook(@TypeOf(target)).create(target, detour);
-}
-
-pub fn findAndCreateHook(module_name: [:0]const u16, function_name: [:0]const u8, detour: anytype) FindAndCreateError!Hook(@TypeOf(detour)) {
-    return Hook(@TypeOf(detour)).findAndCreateHook(module_name, function_name, detour);
 }
 
 pub fn enableAll() QueueEnableDisableError!void {
@@ -369,18 +370,28 @@ pub fn applyQueued() ApplyQueuedError!void {
 }
 
 test {
+    const AddHook = Hook(*const fn (i32, i32) callconv(.c) i32);
+    const MessageBoxHook = Hook(*const fn (
+        hWnd: ?std.os.windows.HWND,
+        lpText: std.os.windows.LPCSTR,
+        lpCaption: std.os.windows.LPCSTR,
+        uType: std.os.windows.UINT,
+        wLanguageId: std.os.windows.WORD,
+    ) callconv(.c) c_int);
+
     try init();
     defer deinit() catch unreachable;
 
     const funcs = struct {
-        var trampoline: *const fn (i32, i32) callconv(.C) i32 = undefined;
+        var original_add: AddHook.Type = &add;
+        var original_message_box: MessageBoxHook.Type = &MessageBoxExA;
 
-        fn add(a: i32, b: i32) callconv(.C) i32 {
+        fn add(a: i32, b: i32) callconv(.c) i32 {
             return a + b;
         }
 
-        fn detouredAdd(a: i32, b: i32) callconv(.C) i32 {
-            return trampoline(a, b) * 2;
+        fn detouredAdd(a: i32, b: i32) callconv(.c) i32 {
+            return original_add(a, b) * 2;
         }
 
         extern fn MessageBoxExA(
@@ -389,7 +400,7 @@ test {
             lpCaption: std.os.windows.LPCSTR,
             uType: std.os.windows.UINT,
             wLanguageId: std.os.windows.WORD,
-        ) callconv(.C) c_int;
+        ) callconv(.c) c_int;
 
         fn FakeMessageBoxExA(
             hWnd: ?std.os.windows.HWND,
@@ -397,7 +408,7 @@ test {
             lpCaption: std.os.windows.LPCSTR,
             uType: std.os.windows.UINT,
             wLanguageId: std.os.windows.WORD,
-        ) callconv(.C) c_int {
+        ) callconv(.c) c_int {
             _ = wLanguageId;
             _ = uType;
             _ = lpCaption;
@@ -407,10 +418,8 @@ test {
         }
     };
 
-    var hook = try createHook(&funcs.add, &funcs.detouredAdd);
+    var hook = try AddHook.create(&funcs.add, &funcs.detouredAdd, &funcs.original_add);
     defer hook.destroy() catch unreachable;
-
-    funcs.trampoline = hook.trampoline;
 
     try std.testing.expectEqual(@as(i32, 15), funcs.add(7, 8));
     try hook.enable();
@@ -420,7 +429,12 @@ test {
     try hook.disable();
     try std.testing.expectEqual(@as(i32, 15), funcs.add(7, 8));
 
-    var hook2 = try findAndCreateHook(std.unicode.utf8ToUtf16LeStringLiteral("user32"), "MessageBoxExA", &funcs.FakeMessageBoxExA);
+    var hook2 = try MessageBoxHook.findAndCreateHook(
+        std.unicode.utf8ToUtf16LeStringLiteral("user32"),
+        "MessageBoxExA",
+        &funcs.FakeMessageBoxExA,
+        &funcs.original_message_box,
+    );
     defer hook2.destroy() catch unreachable;
 
     try hook2.enable();
@@ -429,21 +443,22 @@ test {
 }
 
 test "queued" {
-    const funcs = struct {
-        var trampoline: *const fn (i32, i32) callconv(.C) i32 = undefined;
+    const AddHook = Hook(*const fn (i32, i32) callconv(.c) i32);
 
-        fn add(a: i32, b: i32) callconv(.C) i32 {
+    const funcs = struct {
+        var original_add: AddHook.Type = &add;
+
+        fn add(a: i32, b: i32) callconv(.c) i32 {
             return a + b;
         }
 
-        fn detouredAdd(a: i32, b: i32) callconv(.C) i32 {
-            return trampoline(a, b) * 2;
+        fn detouredAdd(a: i32, b: i32) callconv(.c) i32 {
+            return original_add(a, b) * 2;
         }
     };
 
     try init();
-    var hook = try createHook(&funcs.add, &funcs.detouredAdd);
-    funcs.trampoline = hook.trampoline;
+    var hook = try AddHook.create(&funcs.add, &funcs.detouredAdd, &funcs.original_add);
 
     try hook.queueEnable();
 
