@@ -1,33 +1,48 @@
 const std = @import("std");
 
-pub fn build(b: *std.build.Builder) !void {
+pub fn build(b: *std.Build) !void {
+    const target = b.standardTargetOptions(.{});
+    const optimize = b.standardOptimizeOption(.{});
+
     const minhook = b.dependency("minhook", .{});
 
-    const lib = b.addStaticLibrary(.{
-        .name = "minhook",
-        .target = b.standardTargetOptions(.{}),
-        .optimize = b.standardOptimizeOption(.{}),
+    const minhook_c_module = b.createModule(.{
+        .link_libc = true,
+        .target = target,
+        .optimize = optimize,
     });
 
-    lib.linkLibC();
-    lib.addIncludePath(minhook.path("include"));
-    lib.addCSourceFile(.{ .file = minhook.path("src/buffer.c"), .flags = &.{} });
-    lib.addCSourceFile(.{ .file = minhook.path("src/hook.c"), .flags = &.{} });
-    lib.addCSourceFile(.{ .file = minhook.path("src/trampoline.c"), .flags = &.{} });
-    lib.addCSourceFile(.{ .file = minhook.path("src/hde/hde32.c"), .flags = &.{} });
-    lib.addCSourceFile(.{ .file = minhook.path("src/hde/hde64.c"), .flags = &.{} });
+    minhook_c_module.addIncludePath(minhook.path("include"));
+    minhook_c_module.addCSourceFiles(.{
+        .root = minhook.path("src"),
+        .files = &.{
+            "buffer.c",
+            "hook.c",
+            "trampoline.c",
+            "hde/hde32.c",
+            "hde/hde64.c",
+        },
+        .flags = &.{},
+    });
+
+    const lib = b.addLibrary(.{
+        .name = "minhook",
+        .linkage = .static,
+        .root_module = minhook_c_module,
+    });
 
     b.installArtifact(lib);
 
-    _ = b.addModule("minhook", .{ .source_file = .{ .path = "minhook.zig" } });
-
-    const minhook_test = b.addTest(.{
-        .name = "minhook-test",
-        .root_source_file = .{ .path = "minhook.zig" },
+    const minhook_module = b.addModule("minhook", .{
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = b.path("minhook.zig"),
     });
 
-    minhook_test.linkLibrary(lib);
+    const test_executable = b.addTest(.{
+        .root_module = minhook_module,
+    });
 
-    const test_step = b.step("test", "test minhook bindings");
-    test_step.dependOn(&b.addRunArtifact(minhook_test).step);
+    const test_step = b.step("test", "");
+    test_step.dependOn(&test_executable.step);
 }
